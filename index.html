@@ -48,14 +48,24 @@
             margin: 10px 0;
             border-radius: 8px;
         }
+        .error {
+            color: #ff4444;
+            margin: 10px 0;
+        }
+        .loading {
+            display: none;
+            margin: 20px 0;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Phantom Wallet</h1>
         <div id="status" class="status">No conectado</div>
+        <div id="error" class="error"></div>
         <button id="connectBtn" class="button">Conectar Phantom</button>
         <button id="getTokensBtn" class="button" style="display: none;">Ver Tokens</button>
+        <div id="loading" class="loading">Cargando...</div>
         <div id="tokenList" class="token-list"></div>
     </div>
 
@@ -68,12 +78,39 @@
         tg.expand();
         tg.ready();
 
+        // Función para mostrar errores
+        function showError(message) {
+            document.getElementById('error').textContent = message;
+            setTimeout(() => {
+                document.getElementById('error').textContent = '';
+            }, 5000);
+        }
+
+        // Función para detectar Phantom
+        async function detectPhantom() {
+            if (typeof window.solana !== 'undefined') {
+                provider = window.solana;
+            } else if (typeof window.phantom?.solana !== 'undefined') {
+                provider = window.phantom.solana;
+            } else {
+                if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                    // Dispositivo móvil
+                    window.location.href = 'https://phantom.app/ul/browse';
+                } else {
+                    // PC
+                    showError('Phantom no está instalado. Por favor, instálalo desde phantom.app');
+                }
+                return false;
+            }
+            return true;
+        }
+
         async function initPhantom() {
             try {
-                provider = window.phantom?.solana;
+                if (!await detectPhantom()) return;
 
-                if (!provider?.isPhantom) {
-                    document.getElementById('status').textContent = 'Phantom no está instalado';
+                if (!provider.isPhantom) {
+                    showError('Por favor, instala Phantom Wallet');
                     return;
                 }
 
@@ -88,13 +125,16 @@
                     publicKey: publicKey
                 }));
             } catch (err) {
-                document.getElementById('status').textContent = `Error: ${err.message}`;
+                showError(`Error: ${err.message}`);
             }
         }
 
         async function getTokens() {
             try {
-                const response = await fetch(`https://api.mainnet-beta.solana.com`, {
+                document.getElementById('loading').style.display = 'block';
+                document.getElementById('tokenList').innerHTML = '';
+
+                const response = await fetch('https://api.mainnet-beta.solana.com', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -117,13 +157,18 @@
 
                 const data = await response.json();
                 const tokenList = document.getElementById('tokenList');
-                tokenList.innerHTML = '';
-
+                
                 if (data.result?.value) {
-                    data.result.value.forEach(account => {
-                        const token = account.account.data.parsed.info;
-                        const amount = token.tokenAmount.uiAmount;
-                        if (amount > 0) {
+                    const tokens = data.result.value.filter(account => 
+                        account.account.data.parsed.info.tokenAmount.uiAmount > 0
+                    );
+
+                    if (tokens.length === 0) {
+                        tokenList.innerHTML = '<div class="token-item">No se encontraron tokens</div>';
+                    } else {
+                        tokens.forEach(account => {
+                            const token = account.account.data.parsed.info;
+                            const amount = token.tokenAmount.uiAmount;
                             const tokenElement = document.createElement('div');
                             tokenElement.className = 'token-item';
                             tokenElement.innerHTML = `
@@ -131,22 +176,28 @@
                                 <div>Cantidad: ${amount}</div>
                             `;
                             tokenList.appendChild(tokenElement);
-                        }
-                    });
+                        });
 
-                    // Enviar datos al bot
-                    tg.sendData(JSON.stringify({
-                        action: 'tokens',
-                        tokens: data.result.value
-                    }));
+                        // Enviar datos al bot
+                        tg.sendData(JSON.stringify({
+                            action: 'tokens',
+                            tokens: tokens
+                        }));
+                    }
                 }
             } catch (error) {
-                document.getElementById('status').textContent = `Error obteniendo tokens: ${error.message}`;
+                showError(`Error obteniendo tokens: ${error.message}`);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
             }
         }
 
+        // Event Listeners
         document.getElementById('connectBtn').addEventListener('click', initPhantom);
         document.getElementById('getTokensBtn').addEventListener('click', getTokens);
+
+        // Verificar Phantom al cargar
+        window.addEventListener('load', detectPhantom);
     </script>
 </body>
 </html> 
