@@ -6,6 +6,10 @@ Esta es una Web App para integrar Phantom Wallet con un bot de Telegram. La apli
 - Ver tus tokens y balances
 - Realizar operaciones seguras a través de Phantom
 
+## Demo
+
+Puedes ver la Web App en funcionamiento aquí: [https://rs1525.github.io/phantom-webapp](https://rs1525.github.io/phantom-webapp)
+
 ## Configuración
 
 1. Instala las dependencias del bot:
@@ -13,13 +17,18 @@ Esta es una Web App para integrar Phantom Wallet con un bot de Telegram. La apli
 pip install -r requirements.txt
 ```
 
-2. Configura las variables de entorno en el archivo `.env`:
-```
-TELEGRAM_TOKEN=tu_token_aqui
-WEBAPP_URL=https://tu-usuario.github.io/tu-repo
+2. Copia `.env.example` a `.env` y configura tus variables de entorno:
+```bash
+cp .env.example .env
 ```
 
-3. Ejecuta el bot:
+3. Edita el archivo `.env` con tus credenciales:
+```
+TELEGRAM_TOKEN=tu_token_aqui
+WEBAPP_URL=https://rs1525.github.io/phantom-webapp
+```
+
+4. Ejecuta el bot:
 ```bash
 python phantom_bot.py
 ```
