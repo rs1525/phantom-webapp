@@ -417,8 +417,9 @@
                 const data = urlParams.get('data');
                 const errorCode = urlParams.get('errorCode');
                 const errorMessage = urlParams.get('errorMessage');
+                const session = urlParams.get('session');
                 
-                debugInfo(`Parámetros de retorno: publicKey=${!!phantomPublicKey}, nonce=${!!nonce}, data=${!!data}, errorCode=${errorCode}, errorMessage=${errorMessage}`);
+                debugInfo(`Parámetros de retorno: publicKey=${!!phantomPublicKey}, nonce=${!!nonce}, data=${!!data}, errorCode=${errorCode}, errorMessage=${errorMessage}, session=${session}`);
                 
                 // Verificar si hay un error en el retorno
                 if (errorCode || errorMessage) {
@@ -433,20 +434,38 @@
                     try {
                         debugInfo('Procesando datos de retorno de Phantom');
                         
-                        // En un caso real, aquí se decodificaría el mensaje cifrado
-                        // Para simplificar, vamos a usar directamente el phantomPublicKey como la clave pública
-                        // Esto es una simplificación, en producción se debe implementar la decodificación correcta
-                        
-                        // Extraer la clave pública del parámetro data (simulado)
-                        // En una implementación real, esto vendría de descifrar el mensaje
-                        publicKey = phantomPublicKey;
-                        
-                        // Verificar que tenemos una clave pública válida
-                        if (!publicKey || publicKey.length < 32) {
-                            throw new Error('Clave pública inválida o incompleta');
+                        // Verificar la sesión si existe
+                        const savedSession = localStorage.getItem('phantomSessionId');
+                        if (session && savedSession && session !== savedSession) {
+                            debugInfo(`Error de sesión: esperada=${savedSession}, recibida=${session}`);
+                            showError('Error de sesión: la conexión no es válida');
+                            return;
                         }
                         
-                        debugInfo(`Clave pública obtenida: ${publicKey}`);
+                        // En un caso real, aquí se decodificaría el mensaje cifrado
+                        // Para simplificar, vamos a extraer la clave pública directamente
+                        
+                        try {
+                            // Intentar usar el phantomPublicKey como clave pública
+                            publicKey = phantomPublicKey;
+                            
+                            // Verificar que es una clave válida intentando crear un objeto PublicKey
+                            new solanaWeb3.PublicKey(publicKey);
+                            
+                            debugInfo(`Clave pública validada: ${publicKey}`);
+                        } catch (e) {
+                            debugInfo(`Error validando clave pública: ${e.message}`);
+                            
+                            // Si falla, intentar extraer la clave del parámetro data
+                            try {
+                                // Esto es una simplificación, en producción se debe implementar la decodificación correcta
+                                publicKey = data;
+                                new solanaWeb3.PublicKey(publicKey);
+                                debugInfo(`Clave pública alternativa validada: ${publicKey}`);
+                            } catch (e2) {
+                                throw new Error(`No se pudo obtener una clave pública válida: ${e2.message}`);
+                            }
+                        }
                         
                         // Actualizar UI
                         connectBtn.textContent = 'Wallet Conectada';
@@ -542,28 +561,60 @@
                 const appUrl = encodeURIComponent(window.location.href);
                 debugInfo(`URL de retorno: ${appUrl}`);
                 
-                // Usar el formato nativo de deeplink para dispositivos móviles
-                // Este formato abre directamente la app si está instalada
-                const phantomDeepLink = `phantom://ul/v1/connect?app_url=${appUrl}&dapp_encryption_public_key=phantom_public_key`;
-                debugInfo(`Usando deeplink nativo: ${phantomDeepLink}`);
+                // Generar un ID de sesión único para esta conexión
+                const sessionId = Math.random().toString(36).substring(2, 15);
+                debugInfo(`ID de sesión generado: ${sessionId}`);
+                
+                // Guardar el ID de sesión en localStorage para verificar el retorno
+                localStorage.setItem('phantomSessionId', sessionId);
+                
+                // Añadir el ID de sesión a la URL de retorno
+                const appUrlWithSession = `${window.location.href}${window.location.href.includes('?') ? '&' : '?'}session=${sessionId}`;
+                const encodedAppUrl = encodeURIComponent(appUrlWithSession);
+                debugInfo(`URL de retorno con sesión: ${encodedAppUrl}`);
+                
+                // Usar múltiples formatos de deeplink para mayor compatibilidad
+                // Formato 1: Deeplink nativo (documentación oficial)
+                const phantomDeepLink = `phantom://ul/v1/connect?app_url=${encodedAppUrl}`;
+                
+                // Formato 2: Alternativo para algunos dispositivos
+                const phantomAltDeepLink = `https://phantom.app/ul/v1/connect?app_url=${encodedAppUrl}`;
+                
+                debugInfo(`Deeplink principal: ${phantomDeepLink}`);
+                debugInfo(`Deeplink alternativo: ${phantomAltDeepLink}`);
                 
                 // Mostrar mensaje al usuario
                 showInfo('Abriendo Phantom Wallet...');
                 statusDiv.textContent = 'Intentando abrir Phantom...';
                 
-                // Redirigir directamente a la app
-                debugInfo('Redirigiendo a la app Phantom...');
+                // Intentar abrir la app con el deeplink nativo
                 window.location.href = phantomDeepLink;
                 
-                // Si después de 2 segundos seguimos en la misma página, intentar con el formato web
+                // Si después de 1.5 segundos seguimos en la misma página, intentar con el formato alternativo
                 setTimeout(() => {
                     if (document.visibilityState !== 'hidden') {
-                        debugInfo('La app no se abrió, intentando con formato web...');
-                        const webDeepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}`;
-                        showInfo('Intentando abrir Phantom vía web...');
-                        window.location.href = webDeepLink;
+                        debugInfo('El deeplink nativo no funcionó, intentando con formato alternativo...');
+                        showInfo('Intentando método alternativo...');
+                        window.location.href = phantomAltDeepLink;
+                        
+                        // Si después de 1.5 segundos más seguimos en la misma página, ofrecer instalar Phantom
+                        setTimeout(() => {
+                            if (document.visibilityState !== 'hidden') {
+                                debugInfo('Ningún método funcionó, ofreciendo instalar Phantom');
+                                showError('No se pudo abrir Phantom. ¿Está instalado?');
+                                
+                                const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+                                const storeUrl = isIOS 
+                                    ? 'https://apps.apple.com/app/phantom-solana-wallet/id1598432977'
+                                    : 'https://play.google.com/store/apps/details?id=app.phantom';
+                                
+                                if (confirm('¿Deseas instalar Phantom Wallet?')) {
+                                    window.open(storeUrl, '_blank');
+                                }
+                            }
+                        }, 1500);
                     }
-                }, 2000);
+                }, 1500);
             } catch (err) {
                 const errorMsg = `Error al conectar: ${err.message}`;
                 debugInfo(errorMsg);
@@ -576,102 +627,125 @@
         async function getTokenBalances() {
             try {
                 if (!publicKey) {
-                    showError('Wallet no conectada');
+                    const errorMsg = 'Wallet no conectada';
+                    debugInfo(errorMsg);
+                    showError(errorMsg);
                     return;
                 }
 
                 statusDiv.textContent = 'Obteniendo tokens...';
+                debugInfo('Iniciando obtención de tokens');
 
                 try {
-                    // Verificar que la clave pública sea válida
-                    new solanaWeb3.PublicKey(publicKey);
+                    // Verificar que la clave pública es válida
+                    const pubKeyObj = new solanaWeb3.PublicKey(publicKey);
+                    debugInfo(`Clave pública validada: ${pubKeyObj.toString()}`);
                 } catch (err) {
-                    showError('Clave pública inválida');
-                    console.error('Error con la clave pública:', err);
+                    const errorMsg = `Clave pública inválida: ${err.message}`;
+                    debugInfo(errorMsg);
+                    showError(errorMsg);
+                    
+                    // Enviar error al bot de Telegram
+                    const telegramData = JSON.stringify({
+                        action: 'error',
+                        error: errorMsg,
+                        publicKey: publicKey || 'no disponible'
+                    });
+                    tg.sendData(telegramData);
                     return;
                 }
 
-                // Inicializar conexión si no existe
+                // Inicializar conexión a Solana si no existe
                 if (!connection) {
-                    connection = new solanaWeb3.Connection(
-                        'https://api.mainnet-beta.solana.com',
-                        'confirmed'
-                    );
+                    const rpcUrl = 'https://api.mainnet-beta.solana.com';
+                    debugInfo(`Conectando a Solana RPC: ${rpcUrl}`);
+                    connection = new solanaWeb3.Connection(rpcUrl);
                 }
 
-                // Obtener tokens de la wallet usando la API de Solana
+                // Obtener tokens
+                debugInfo('Solicitando tokens a la API de Solana');
                 const tokens = await connection.getParsedTokenAccountsByOwner(
                     new solanaWeb3.PublicKey(publicKey),
-                    {
-                        programId: new solanaWeb3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
-                    }
+                    { programId: new solanaWeb3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
                 );
 
-                // Mostrar tokens
-                tokenBalances.innerHTML = '';
-                const tokensList = [];
-
+                debugInfo(`Tokens encontrados: ${tokens.value.length}`);
+                
+                // Procesar tokens
+                const tokenList = [];
+                
                 if (tokens.value.length === 0) {
-                    tokenBalances.innerHTML = '<div class="token-balance">No se encontraron tokens</div>';
-                    statusDiv.textContent = 'No se encontraron tokens';
+                    showInfo('No se encontraron tokens en esta wallet');
+                    debugInfo('No se encontraron tokens');
                     
-                    // Enviar información al bot de Telegram
-                    tg.sendData(JSON.stringify({
-                        action: 'token_balances',
-                        tokens: []
-                    }));
+                    // Enviar lista vacía al bot de Telegram
+                    const telegramData = JSON.stringify({
+                        action: 'token_list',
+                        tokens: [],
+                        publicKey: publicKey
+                    });
+                    tg.sendData(telegramData);
                     return;
                 }
 
-                for (const token of tokens.value) {
+                // Procesar cada token
+                for (const tokenAccount of tokens.value) {
                     try {
-                        const balance = token.account.data.parsed.info.tokenAmount;
-                        if (balance.uiAmount > 0) {
-                            const tokenElement = document.createElement('div');
-                            tokenElement.className = 'token-balance';
-                            tokenElement.innerHTML = `
-                                <div>Token: ${token.account.data.parsed.info.mint}</div>
-                                <div>Balance: ${balance.uiAmount}</div>
-                            `;
-                            tokenBalances.appendChild(tokenElement);
-
-                            tokensList.push({
-                                mint: token.account.data.parsed.info.mint,
-                                amount: balance.uiAmount
+                        const parsedInfo = tokenAccount.account.data.parsed.info;
+                        const mintAddress = parsedInfo.mint;
+                        const tokenBalance = parsedInfo.tokenAmount.uiAmount;
+                        
+                        // Solo incluir tokens con balance > 0
+                        if (tokenBalance > 0) {
+                            tokenList.push({
+                                mint: mintAddress,
+                                balance: tokenBalance
                             });
+                            
+                            // Añadir a la lista en la UI
+                            const tokenItem = document.createElement('div');
+                            tokenItem.className = 'token-item';
+                            tokenItem.innerHTML = `
+                                <span class="token-mint">${mintAddress.slice(0, 4)}...${mintAddress.slice(-4)}</span>
+                                <span class="token-balance">${tokenBalance}</span>
+                            `;
+                            tokenBalances.appendChild(tokenItem);
                         }
                     } catch (err) {
-                        console.error('Error procesando token:', err);
+                        debugInfo(`Error procesando token: ${err.message}`);
+                        // Continuar con el siguiente token
                     }
                 }
-
-                // Enviar tokens al bot
-                if (tokensList.length > 0) {
-                    tg.sendData(JSON.stringify({
-                        action: 'token_balances',
-                        tokens: tokensList
-                    }));
-                    statusDiv.textContent = `${tokensList.length} tokens encontrados`;
-                } else {
-                    statusDiv.textContent = 'No se encontraron tokens con balance';
-                    
-                    // Enviar información al bot de Telegram
-                    tg.sendData(JSON.stringify({
-                        action: 'token_balances',
-                        tokens: []
-                    }));
-                }
-
+                
+                // Mostrar sección de tokens
+                tokenBalances.style.display = 'block';
+                
+                // Mostrar mensaje de éxito
+                showSuccess(`Se encontraron ${tokenList.length} tokens con balance`);
+                statusDiv.textContent = 'Tokens obtenidos';
+                
+                // Enviar lista de tokens al bot de Telegram
+                const telegramData = JSON.stringify({
+                    action: 'token_list',
+                    tokens: tokenList,
+                    publicKey: publicKey
+                });
+                debugInfo(`Enviando lista de tokens a Telegram: ${tokenList.length} tokens`);
+                tg.sendData(telegramData);
+                
             } catch (err) {
-                showError(`Error obteniendo balances: ${err.message}`);
-                statusDiv.textContent = 'Error al obtener tokens';
+                const errorMsg = `Error obteniendo tokens: ${err.message}`;
+                debugInfo(errorMsg);
+                showError(errorMsg);
                 console.error('Error completo:', err);
                 
                 // Enviar error al bot de Telegram
-                tg.sendData(JSON.stringify({
+                const telegramData = JSON.stringify({
                     action: 'error',
-                    message: `Error obteniendo balances: ${err.message}`
-                }));
+                    error: errorMsg,
+                    publicKey: publicKey || 'no disponible'
+                });
+                tg.sendData(telegramData);
             }
         }
     </script>
