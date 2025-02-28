@@ -29,14 +29,9 @@ load_dotenv()
 class Config:
     TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
     SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
-    BIRDEYE_API_KEY = os.getenv("BIRDEYE_API_KEY", "c9c65095c0864519a3d0e8a7b0c1e4c4")
-    PHANTOM_API_BASE = "https://phantom.app/api"
-    PHANTOM_DEEPLINK_BASE = "https://phantom.app/ul/browse"
     JUPITER_API_BASE = "https://price.jup.ag/v4"
-    COINGECKO_API_BASE = "https://api.coingecko.com/api/v3"
-    BIRDEYE_API_BASE = "https://public-api.birdeye.so"
     RAYDIUM_API_BASE = "https://api.raydium.io/v2"
-    WEBAPP_URL = os.getenv("WEBAPP_URL", "https://your-webapp-url.com")  # Actualiza esto con tu URL
+    WEBAPP_URL = os.getenv("WEBAPP_URL", "https://your-webapp-url.com")
 
 # Keyboard Markup
 def get_main_keyboard():
@@ -82,10 +77,6 @@ TA_PARAMS = {
 class TokenAnalyzer:
     def __init__(self):
         self.setup_selenium()
-        self.headers = {
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
     
     def setup_selenium(self):
         """Configure Selenium for headless browsing"""
@@ -115,442 +106,312 @@ class TokenAnalyzer:
         except Exception:
             pass
     
-    async def get_token_price(self, token_address: str) -> Dict:
-        """Get real-time token price and history from Jupiter Aggregator"""
+    async def get_token_info(self, token_address: str) -> dict:
+        """Obtener información detallada de un token usando endpoints públicos"""
         try:
-            # Get current price
-            price_url = f"{Config.JUPITER_API_BASE}/price?ids={token_address}"
-            price_response = requests.get(price_url)
-            price_data = price_response.json()
+            # Usar Jupiter API para precio y datos básicos
+            jupiter_url = f"{Config.JUPITER_API_BASE}/price?ids={token_address}"
+            response = requests.get(jupiter_url)
+            price_data = response.json()
             
-            # Get price history (24h)
-            history_url = f"{Config.JUPITER_API_BASE}/price/history?ids={token_address}&interval=1h"
+            # Usar Raydium API para datos adicionales
+            raydium_url = f"{Config.RAYDIUM_API_BASE}/token/{token_address}"
+            raydium_response = requests.get(raydium_url)
+            token_data = raydium_response.json()
+            
+            if not price_data or not token_data:
+                return None
+
+            # Calcular cambio de precio usando datos históricos de Raydium
+            history_url = f"{Config.RAYDIUM_API_BASE}/price-history?address={token_address}&type=1D"
             history_response = requests.get(history_url)
             history_data = history_response.json()
             
-            if price_data.get('data') and history_data.get('data'):
-                token_info = price_data['data'][token_address]
-                price_history = history_data['data'][token_address]
-                
-                # Calculate price change
-                current_price = float(token_info['price'])
-                prices_24h = [float(p['price']) for p in price_history]
-                price_24h_ago = prices_24h[0] if prices_24h else current_price
-                price_change = ((current_price - price_24h_ago) / price_24h_ago) * 100
-                
-                return {
-                    "price": current_price,
-                    "price_change_24h": price_change,
-                    "price_history": prices_24h,
-                    "volume_24h": float(token_info.get('volume24h', 0)),
-                    "volume_history": [float(p.get('volume', 0)) for p in price_history]
-                }
-        except Exception as e:
-            print(f"Error getting price data: {str(e)}")
-        return {
-            "price": 0,
-            "price_change_24h": 0,
-            "price_history": [],
-            "volume_24h": 0,
-            "volume_history": []
-        }
+            price_change_24h = 0
+            if history_data and len(history_data) > 1:
+                old_price = history_data[0]['price']
+                new_price = history_data[-1]['price']
+                price_change_24h = ((new_price - old_price) / old_price) * 100
 
-    async def get_trending_tokens(self) -> List[Dict]:
-        """Get trending tokens from Raydium"""
+            return {
+                "name": token_data.get('name'),
+                "symbol": token_data.get('symbol'),
+                "price": float(price_data['data'][token_address].get('price', 0)),
+                "price_change_24h": price_change_24h,
+                "volume_24h": float(token_data.get('volume24h', 0)),
+                "market_cap": float(token_data.get('marketCap', 0)),
+                "holders": token_data.get('holderCount', 0),
+                "created_at": token_data.get('createdAt', int(time.time()))
+            }
+        except Exception as e:
+            print(f"Error getting token info: {str(e)}")
+            return None
+
+    async def get_trending_tokens(self) -> list:
+        """Obtener tokens en tendencia usando Raydium"""
         try:
-            # Get trending tokens from Raydium API
-            url = f"{Config.RAYDIUM_API_BASE}/main/pairs"
+            url = f"{Config.RAYDIUM_API_BASE}/pairs"
             response = requests.get(url)
             data = response.json()
             
             if not data:
-                raise Exception("No se pudieron obtener los tokens en tendencia")
-            
-            # Sort by volume
+                return []
+
+            # Ordenar por volumen
             pairs = sorted(data, key=lambda x: float(x.get('volume24h', 0)), reverse=True)
-            trending_tokens = []
-            
-            for pair in pairs[:5]:  # Get top 5 by volume
-                try:
-                    token = pair['tokenInfo']
-                    price_url = f"{Config.JUPITER_API_BASE}/price?ids={token['mint']}"
-                    price_response = requests.get(price_url)
-                    price_data = price_response.json()
-                    
-                    if price_data.get('data', {}).get(token['mint']):
-                        price_info = price_data['data'][token['mint']]
-                        trending_tokens.append({
-                            "name": token['name'],
-                            "symbol": token['symbol'],
-                            "address": token['mint'],
-                            "price": float(price_info['price']),
-                            "price_change_24h": float(pair.get('priceChange24h', 0)),
-                            "volume_24h": float(pair['volume24h']),
-                            "liquidity": float(pair['liquidity']),
-                            "market_cap": float(price_info['price']) * float(token.get('supply', 0))
-                        })
-                except Exception as e:
-                    print(f"Error getting data for token {token['symbol']}: {str(e)}")
+            trending = []
+
+            for pair in pairs[:10]:  # Top 10 tokens
+                if 'tokenInfo' not in pair:
                     continue
-            
-            return trending_tokens
-            
+                    
+                token = pair['tokenInfo']
+                token_info = await self.get_token_info(token['mint'])
+                
+                if token_info:
+                    trending.append({
+                        **token_info,
+                        "address": token['mint']
+                    })
+
+            return trending
         except Exception as e:
-            print(f"Error fetching trending tokens: {str(e)}")
+            print(f"Error getting trending tokens: {str(e)}")
             return []
 
-    async def get_token_data(self, token_address: str) -> Dict:
-        """Get comprehensive token data"""
+    def analyze_token(self, token_data: dict) -> dict:
+        """Analizar un token y dar recomendaciones"""
         try:
-            # Get token data from Birdeye
-            token_url = f"{Config.BIRDEYE_API_BASE}/public/token/{token_address}"
-            token_response = requests.get(token_url, headers=self.headers, timeout=10)
-            token_data = token_response.json()
+            analysis = []
+            risk_level = "BAJO"
+
+            # Análisis de precio
+            if token_data['price_change_24h'] > 20:
+                analysis.append("⚠️ Precio subió más de 20% en 24h")
+                risk_level = "ALTO"
+            elif token_data['price_change_24h'] < -20:
+                analysis.append("⚠️ Precio bajó más de 20% en 24h")
+                risk_level = "ALTO"
+
+            # Análisis de volumen
+            if token_data['volume_24h'] < 10000:
+                analysis.append("⚠️ Volumen bajo (<$10k)")
+                risk_level = "ALTO"
+            elif token_data['volume_24h'] > 1000000:
+                analysis.append("✅ Alto volumen (>$1M)")
+
+            # Análisis de holders
+            if token_data['holders'] < 100:
+                analysis.append("⚠️ Pocos holders (<100)")
+                risk_level = "ALTO"
+            elif token_data['holders'] > 1000:
+                analysis.append("✅ Buena distribución (>1000 holders)")
+
+            # Análisis de edad
+            created_at = datetime.fromtimestamp(token_data['created_at'])
+            age_days = (datetime.now() - created_at).days
             
-            if not token_data.get('success'):
-                raise Exception("No token data available")
-            
-            token_info = token_data['data']
-            
-            # Get additional market data
-            market_url = f"{Config.BIRDEYE_API_BASE}/public/market_program/{token_address}"
-            market_response = requests.get(market_url, headers=self.headers, timeout=10)
-            market_data = market_response.json()
-            
-            # Get price history
-            history_url = f"{Config.BIRDEYE_API_BASE}/public/price_history?address={token_address}&type=1H&limit=24"
-            history_response = requests.get(history_url, headers=self.headers, timeout=10)
-            history_data = history_response.json()
-            
-            price_history = []
-            volume_history = []
-            
-            if history_data.get('success'):
-                history = history_data['data']
-                price_history = [float(p['value']) for p in history]
-                volume_history = [float(p.get('volume', 0)) for p in history]
-            
+            if age_days < 7:
+                analysis.append("⚠️ Token muy nuevo (<7 días)")
+                risk_level = "ALTO"
+            elif age_days > 30:
+                analysis.append("✅ Token establecido (>30 días)")
+
             return {
-                "name": token_info.get('name', ''),
-                "symbol": token_info.get('symbol', ''),
-                "price": float(token_info.get('price', 0)),
-                "price_change_24h": float(token_info.get('priceChange24h', 0)),
-                "market_cap": float(token_info.get('marketCap', 0)),
-                "volume_24h": float(token_info.get('volume24h', 0)),
-                "holders_count": int(token_info.get('holderCount', 0)),
-                "liquidity": float(token_info.get('liquidity', 0)),
-                "created_at": token_info.get('createdAt', ''),
-                "price_history": price_history,
-                "volume_history": volume_history
+                "analysis": analysis,
+                "risk_level": risk_level
             }
-            
         except Exception as e:
-            print(f"Error getting token data: {str(e)}")
-            return None
-
-    def calculate_rsi(self, prices: List[float], period: int = 14) -> float:
-        """Calculate RSI indicator"""
-        try:
-            if len(prices) < period:
-                return 50  # Default value if not enough data
-                
-            deltas = np.diff(prices)
-            gains = np.where(deltas > 0, deltas, 0)
-            losses = np.where(deltas < 0, -deltas, 0)
-            
-            avg_gain = np.mean(gains[:period])
-            avg_loss = np.mean(losses[:period])
-            
-            if avg_loss == 0:
-                return 100
-            
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-            return round(rsi, 2)
-        except Exception:
-            return 50
-
-    def calculate_macd(self, prices: List[float]) -> Dict:
-        """Calculate MACD indicator"""
-        try:
-            prices_series = pd.Series(prices)
-            exp1 = prices_series.ewm(span=TA_PARAMS['MACD_FAST']).mean()
-            exp2 = prices_series.ewm(span=TA_PARAMS['MACD_SLOW']).mean()
-            macd = exp1 - exp2
-            signal = macd.ewm(span=TA_PARAMS['MACD_SIGNAL']).mean()
+            print(f"Error analyzing token: {str(e)}")
             return {
-                'macd': macd.iloc[-1],
-                'signal': signal.iloc[-1],
-                'histogram': macd.iloc[-1] - signal.iloc[-1]
+                "analysis": ["❌ Error en análisis"],
+                "risk_level": "DESCONOCIDO"
             }
-        except Exception:
-            return {'macd': 0, 'signal': 0, 'histogram': 0}
 
-    def analyze_volume_trend(self, volumes: List[float]) -> Dict:
-        """Analyze volume trends"""
-        try:
-            avg_volume = sum(volumes) / len(volumes)
-            recent_volume = volumes[-1]
-            volume_change = ((recent_volume - avg_volume) / avg_volume) * 100
-            return {
-                'volume_change': volume_change,
-                'is_volume_spike': volume_change > TA_PARAMS['VOLUME_CHANGE_THRESHOLD']
-            }
-        except Exception:
-            return {'volume_change': 0, 'is_volume_spike': False}
+class PhantomBot:
+    def __init__(self):
+        self.token_analyzer = TokenAnalyzer()
 
-    def generate_analysis_report(self, token_data: Dict) -> str:
-        """Generate comprehensive analysis report"""
-        try:
-            # Technical indicators
-            rsi = self.calculate_rsi(token_data['price_history'])
-            macd = self.calculate_macd(token_data['price_history'])
-            volume = self.analyze_volume_trend(token_data['volume_history'])
-            
-            # Market analysis
-            market_trend = "ALCISTA" if token_data['price_change_24h'] > 0 else "BAJISTA"
-            
-            report = [
-                f"📊 *Análisis Técnico Detallado*",
-                f"➤ Tendencia: {market_trend}",
-                f"➤ RSI (14): {rsi:.2f}",
-                f"{'🟢 Sobrecompra' if rsi > 70 else '🔴 Sobreventa' if rsi < 30 else '⚪ Neutral'}",
-                "",
-                f"📈 *Indicadores MACD*",
-                f"➤ MACD: {macd['macd']:.4f}",
-                f"➤ Señal: {macd['signal']:.4f}",
-                f"➤ Histograma: {macd['histogram']:.4f}",
-                "",
-                f"📊 *Análisis de Volumen*",
-                f"➤ Cambio: {volume['volume_change']:.2f}%",
-                f"{'🚨 ¡Spike de volumen detectado!' if volume['is_volume_spike'] else ''}",
-                "",
-                "💡 *Recomendación*"
-            ]
-            
-            # Add trading recommendation based on indicators
-            if rsi > 70 and macd['histogram'] < 0:
-                report.append("⚠️ Considerar tomar ganancias - Señales de sobrecompra")
-            elif rsi < 30 and macd['histogram'] > 0:
-                report.append("✅ Posible oportunidad de compra - Señales de sobreventa")
-            else:
-                report.append("➡️ Mantener posición actual - Sin señales claras")
-            
-            return "\n".join(report)
-        except Exception as e:
-            print(f"Error generating analysis report: {str(e)}")
-            return "❌ No se pudo generar el análisis técnico"
+    def get_main_keyboard(self):
+        """Obtener teclado principal con botón de Web App"""
+        keyboard = [
+            [KeyboardButton("🔗 Conectar Phantom", web_app=WebAppInfo(url=Config.WEBAPP_URL))],
+            [KeyboardButton("📈 Tokens en Tendencia"), KeyboardButton("ℹ️ Ayuda")]
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Telegram Bot Handlers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start command handler"""
-    welcome_message = (
-        "👋 ¡Bienvenido al Bot de Phantom!\n\n"
-        "Usa el botón '🔗 Conectar Phantom' para comenzar.\n"
-        "Este botón abrirá una Web App segura donde podrás:\n"
-        "• Conectar tu wallet de Phantom\n"
-        "• Ver tus tokens\n"
-        "• Realizar operaciones seguras\n\n"
-        "❗ *Importante*: Nunca compartas tu llave privada"
-    )
-    await update.message.reply_text(
-        welcome_message,
-        reply_markup=get_main_keyboard(),
-        parse_mode='Markdown'
-    )
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Comando /start"""
+        welcome_message = (
+            "🤖 *Bienvenido al Bot de Trading en Solana*\n\n"
+            "Este bot te ayuda a:\n"
+            "• Conectar tu Phantom Wallet de forma segura\n"
+            "• Ver tokens en tendencia\n"
+            "• Analizar tokens antes de invertir\n\n"
+            "Para comenzar, usa el botón '🔗 Conectar Phantom'"
+        )
+        await update.message.reply_text(
+            welcome_message,
+            parse_mode='Markdown',
+            reply_markup=self.get_main_keyboard()
+        )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help command handler"""
-    help_text = (
-        "🔍 *Comandos Disponibles*\n\n"
-        "/trending - Muestra los tokens más populares en Phantom\n"
-        "/analyze <dirección_token> - Realiza un análisis técnico detallado de un token\n"
-        "/help - Muestra este mensaje de ayuda\n\n"
-        "📝 *Ejemplo de uso*:\n"
-        "`/analyze DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263`"
-    )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Comando /help"""
+        help_message = (
+            "📚 *Comandos disponibles:*\n\n"
+            "/start - Iniciar el bot\n"
+            "/trending - Ver tokens en tendencia\n"
+            "/analyze <dirección> - Analizar un token específico\n\n"
+            "🔒 *Seguridad:*\n"
+            "• Nunca compartimos tus claves privadas\n"
+            "• Todas las transacciones requieren tu confirmación\n"
+            "• La conexión es directa con Phantom"
+        )
+        await update.message.reply_text(help_message, parse_mode='Markdown')
 
-async def trending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Trending tokens command handler"""
-    await update.message.reply_text("🔍 Buscando los tokens en tendencia en Phantom...")
-    
-    analyzer = TokenAnalyzer()
-    try:
-        trending_tokens = await analyzer.get_trending_tokens()
+    async def trending(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Comando /trending"""
+        await update.message.reply_text("🔍 Buscando tokens en tendencia...")
+        
+        trending_tokens = await self.token_analyzer.get_trending_tokens()
         
         if not trending_tokens:
-            await update.message.reply_text("❌ No se pudieron obtener los tokens en tendencia")
+            await update.message.reply_text("❌ Error obteniendo tokens en tendencia")
             return
+
+        response = ["📈 *Tokens en Tendencia*\n"]
         
-        response = ["🏆 *TOP 5 Tokens en Tendencia en Phantom*\n"]
-        
-        for i, token in enumerate(trending_tokens, 1):
-            age = datetime.now() - datetime.fromtimestamp(int(token['created_at'])) if token['created_at'] else timedelta()
-            age_str = f"{age.days} días" if age.days > 0 else "Menos de 1 día"
+        for token in trending_tokens:
+            analysis = self.token_analyzer.analyze_token(token)
+            price_change = token['price_change_24h']
+            price_emoji = "🟢" if price_change >= 0 else "🔴"
             
             response.append(
-                f"{'🥇' if i == 1 else '🥈' if i == 2 else '🥉' if i == 3 else '🔹'} *{i}. {token['name']} ({token['symbol']})*\n"
-                f"└ Precio: ${token['price']:.4f}\n"
-                f"└ Cambio 24h: {token['price_change_24h']:+.2f}%\n"
-                f"└ Capitalización: ${token['market_cap']:,.2f}\n"
-                f"└ Volumen 24h: ${token['volume_24h']:,.2f}\n"
-                f"└ Liquidez: ${token['liquidity']:,.2f}\n"
-                f"└ Holders: {token['holders_count']:,}\n"
-                f"└ Edad: {age_str}\n"
-                f"└ Contrato: `{token['address']}`\n"
-                f"\n[Ver en Phantom]({Config.PHANTOM_DEEPLINK_BASE}/{token['address']})\n"
+                f"\n*{token['symbol']}* ({price_emoji}{price_change:+.2f}%)\n"
+                f"💰 Precio: ${token['price']:.6f}\n"
+                f"📊 Vol 24h: ${token['volume_24h']:,.0f}\n"
+                f"👥 Holders: {token['holders']:,}\n"
+                f"⚠️ Riesgo: {analysis['risk_level']}\n"
+                f"🔍 Análisis:\n" + "\n".join(f"  • {a}" for a in analysis['analysis'])
             )
-        
-        # Split message if too long
+
+        # Enviar en chunks si es muy largo
         message = "\n".join(response)
         if len(message) > 4096:
-            chunks = [message[i:i+4096] for i in range(0, len(message), 4096)]
-            for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode='Markdown', disable_web_page_preview=True)
+            for i in range(0, len(message), 4096):
+                await update.message.reply_text(
+                    message[i:i+4096],
+                    parse_mode='Markdown'
+                )
         else:
-            await update.message.reply_text(message, parse_mode='Markdown', disable_web_page_preview=True)
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-    finally:
-        del analyzer
+            await update.message.reply_text(message, parse_mode='Markdown')
 
-async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Token analysis command handler"""
-    if not context.args:
-        await update.message.reply_text("❌ Por favor, proporciona la dirección del token a analizar")
-        return
-    
-    token_address = context.args[0]
-    analyzer = TokenAnalyzer()
-    try:
-        token_data = await analyzer.get_token_data(token_address)
-        if not token_data:
-            await update.message.reply_text("❌ No se pudo obtener la información del token")
+    async def analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Comando /analyze <dirección>"""
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Por favor proporciona la dirección del token\n"
+                "Ejemplo: `/analyze TokenAddress`",
+                parse_mode='Markdown'
+            )
             return
+
+        token_address = context.args[0]
+        await update.message.reply_text(f"🔍 Analizando token {token_address}...")
+
+        token_info = await self.token_analyzer.get_token_info(token_address)
         
-        analysis_report = analyzer.generate_analysis_report(token_data)
+        if not token_info:
+            await update.message.reply_text("❌ No se encontró información del token")
+            return
+
+        analysis = self.token_analyzer.analyze_token(token_info)
+        price_change = token_info['price_change_24h']
+        price_emoji = "🟢" if price_change >= 0 else "🔴"
+
         response = (
-            f"💎 *Análisis de Token*\n"
-            f"Precio: ${token_data['price']:.4f}\n"
-            f"Cambio 24h: {token_data['price_change_24h']:.2f}%\n"
-            f"Volumen 24h: ${token_data['volume_24h']:,.2f}\n\n"
-            f"{analysis_report}\n\n"
-            f"[Ver en Phantom]({Config.PHANTOM_DEEPLINK_BASE}/{token_address})"
+            f"*{token_info['name']} ({token_info['symbol']})*\n\n"
+            f"💰 Precio: ${token_info['price']:.6f}\n"
+            f"📊 Cambio 24h: {price_emoji}{price_change:+.2f}%\n"
+            f"💎 Market Cap: ${token_info['market_cap']:,.0f}\n"
+            f"📈 Vol 24h: ${token_info['volume_24h']:,.0f}\n"
+            f"👥 Holders: {token_info['holders']:,}\n"
+            f"⚠️ Nivel de Riesgo: {analysis['risk_level']}\n\n"
+            f"🔍 *Análisis:*\n" + "\n".join(f"• {a}" for a in analysis['analysis'])
         )
-        
+
         await update.message.reply_text(response, parse_mode='Markdown')
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-    finally:
-        del analyzer
 
-async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle data received from Web App"""
-    try:
-        data = json.loads(update.message.web_app_data.data)
-        
-        if data.get('action') == 'connect':
-            # Guardar la dirección de la wallet
-            context.user_data['wallet_address'] = data['publicKey']
-            await update.message.reply_text(
-                f"✅ Wallet conectada exitosamente!\n"
-                f"Dirección: `{data['publicKey']}`",
-                parse_mode='Markdown'
-            )
+    async def handle_webapp_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manejar datos de la Web App"""
+        try:
+            data = json.loads(update.message.web_app_data.data)
             
-        elif data.get('action') == 'tokens':
-            # Procesar lista de tokens
-            tokens = data.get('tokens', [])
-            if not tokens:
-                await update.message.reply_text("No se encontraron tokens en esta wallet")
-                return
-                
-            response = ["💰 *Tus Tokens*\n"]
-            for token_account in tokens:
-                token = token_account['account']['data']['parsed']['info']
-                amount = float(token['tokenAmount']['uiAmount'])
-                if amount > 0:
-                    response.append(
-                        f"• Token: `{token['mint']}`\n"
-                        f"  └ Cantidad: {amount:,.4f}\n"
-                    )
+            if data.get('action') == 'wallet_connected':
+                # Guardar dirección de wallet
+                context.user_data['wallet'] = data['publicKey']
+                await update.message.reply_text(
+                    f"✅ Wallet conectada exitosamente!\n"
+                    f"Dirección: `{data['publicKey']}`",
+                    parse_mode='Markdown'
+                )
             
-            await update.message.reply_text(
-                "\n".join(response),
-                parse_mode='Markdown'
-            )
-            
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error procesando datos: {str(e)}")
+            elif data.get('action') == 'token_balances':
+                # Procesar balances de tokens
+                tokens = data.get('tokens', [])
+                if not tokens:
+                    await update.message.reply_text("No se encontraron tokens")
+                    return
 
-async def handle_trading(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle trading options"""
-    if 'wallet_address' not in context.user_data:
-        await update.message.reply_text(
-            "❌ Primero debes conectar tu wallet usando el botón '🔗 Conectar Phantom'"
-        )
-        return
-        
-    trading_message = (
-        "💱 *Trading con Phantom*\n\n"
-        "*Opciones disponibles:*\n"
-        "• 🔄 Swap Tokens - Intercambia tokens usando Jupiter\n"
-        "• 📊 Precios - Ver precios en tiempo real\n\n"
-        "❗ *Importante*:\n"
-        "• Todas las transacciones requieren aprobación en Phantom\n"
-        "• Verifica siempre los precios antes de operar\n"
-        "• Usa el botón correspondiente para la acción deseada"
-    )
-    
-    await update.message.reply_text(
-        trading_message,
-        parse_mode='Markdown',
-        reply_markup=get_trading_keyboard()
-    )
+                response = ["💰 *Tus Tokens*\n"]
+                for token in tokens:
+                    if token['amount'] > 0:
+                        token_info = await self.token_analyzer.get_token_info(token['mint'])
+                        if token_info:
+                            value = token['amount'] * token_info['price']
+                            response.append(
+                                f"\n*{token_info['symbol']}*\n"
+                                f"• Cantidad: {token['amount']:,.4f}\n"
+                                f"• Valor: ${value:,.2f}"
+                            )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages"""
-    text = update.message.text
-    
-    if text == "🔗 Conectar Phantom":
-        await start(update, context)
-    elif text == "💰 Mi Portfolio":
-        await get_wallet_balance(update, context)
-    elif text == "📈 Tokens en Tendencia":
-        await trending(update, context)
-    elif text == "💱 Trading":
-        await handle_trading(update, context)
-    elif text == "⬅️ Volver al Menú":
-        await start(update, context)
-    elif text == "🔄 Swap Tokens":
-        await update.message.reply_text(
-            "🔄 Para hacer swap:\n"
-            "1. Abre Phantom\n"
-            "2. Ve a la sección Swap\n"
-            "3. Selecciona los tokens\n"
-            "4. Confirma la transacción en Phantom\n\n"
-            "❗ Por seguridad, todas las operaciones deben realizarse directamente en Phantom"
-        )
-    elif text == "📊 Precios":
-        await trending(update, context)
+                await update.message.reply_text(
+                    "\n".join(response),
+                    parse_mode='Markdown'
+                )
+
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Manejar mensajes de texto"""
+        text = update.message.text
+
+        if text == "📈 Tokens en Tendencia":
+            await self.trending(update, context)
+        elif text == "ℹ️ Ayuda":
+            await self.help_command(update, context)
+        elif text == "🔗 Conectar Phantom":
+            await self.start(update, context)
 
 def main():
-    """Main function to run the bot"""
+    """Función principal"""
+    bot = PhantomBot()
     app = Application.builder().token(Config.TELEGRAM_TOKEN).build()
-    
-    # Add command handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("trending", trending))
-    app.add_handler(CommandHandler("analyze", analyze))
-    
-    # Add message handlers
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
-    
-    # Start the bot
-    print("Bot is running...")
+
+    # Comandos
+    app.add_handler(CommandHandler("start", bot.start))
+    app.add_handler(CommandHandler("help", bot.help_command))
+    app.add_handler(CommandHandler("trending", bot.trending))
+    app.add_handler(CommandHandler("analyze", bot.analyze))
+
+    # Mensajes
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, bot.handle_webapp_data))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
+
+    # Iniciar bot
+    print("Bot iniciado...")
     app.run_polling()
 
 if __name__ == "__main__":

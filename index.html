@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phantom Trading Bot</title>
+    <title>Phantom Wallet Connect</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
     <style>
@@ -29,9 +29,15 @@
             margin: 10px;
             cursor: pointer;
             transition: background-color 0.3s;
+            width: 100%;
+            max-width: 300px;
         }
         .button:hover {
             background-color: #673ab7;
+        }
+        .button:disabled {
+            background-color: #666;
+            cursor: not-allowed;
         }
         .status {
             margin: 20px 0;
@@ -39,143 +45,77 @@
             border-radius: 8px;
             background-color: #2c2c2e;
         }
-        .token-list {
-            text-align: left;
-            margin-top: 20px;
-        }
-        .token-item {
-            background-color: #2c2c2e;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            position: relative;
-        }
-        .token-item .price-change {
-            position: absolute;
-            right: 15px;
-            top: 15px;
-            font-weight: bold;
-        }
-        .token-item .price-change.positive {
-            color: #4caf50;
-        }
-        .token-item .price-change.negative {
-            color: #f44336;
-        }
-        .token-item .details {
-            margin-top: 10px;
-            font-size: 14px;
-            color: #888;
-        }
-        .token-item .analysis {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid #444;
-        }
-        .token-item .buy-signal {
-            color: #4caf50;
-            font-weight: bold;
-        }
-        .token-item .sell-signal {
-            color: #f44336;
-            font-weight: bold;
-        }
         .error {
             color: #ff4444;
             margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: rgba(255, 68, 68, 0.1);
+            display: none;
+        }
+        .success {
+            color: #4caf50;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: rgba(76, 175, 80, 0.1);
+            display: none;
         }
         .loading {
             display: none;
             margin: 20px 0;
         }
-        .wallet-status {
+        .wallet-info {
             background: #2c2c2e;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: left;
+            display: none;
+        }
+        .token-balance {
+            background: #3c3c3e;
             padding: 10px;
             border-radius: 8px;
             margin: 10px 0;
-        }
-        .trade-history {
-            margin-top: 20px;
-            text-align: left;
-        }
-        .trade-item {
-            background: #2c2c2e;
-            padding: 10px;
-            margin: 5px 0;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-        .profit {
-            color: #4caf50;
-        }
-        .loss {
-            color: #f44336;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Phantom Trading Bot</h1>
-        <div id="walletStatus" class="wallet-status">No conectado</div>
-        <button id="connectBtn" class="button">Conectar Phantom</button>
+        <h1>Conectar Phantom Wallet</h1>
         <div id="status" class="status">Esperando conexión...</div>
         <div id="error" class="error"></div>
-        <div id="loading" class="loading">Analizando tokens...</div>
-        <div id="tokenList" class="token-list"></div>
-        <div id="tradeHistory" class="trade-history"></div>
+        <div id="success" class="success"></div>
+        <button id="connectBtn" class="button">Conectar Phantom</button>
+        <div id="walletInfo" class="wallet-info">
+            <h3>Wallet conectada</h3>
+            <p id="walletAddress"></p>
+            <div id="tokenBalances"></div>
+        </div>
     </div>
 
     <script>
-        let tg = window.Telegram.WebApp;
-        let connection;
-        let publicKey;
-        
         // Inicializar Telegram Web App
+        let tg = window.Telegram.WebApp;
         tg.expand();
         tg.ready();
 
-        // Función para conectar con Phantom
-        async function connectPhantom() {
-            try {
-                // Verificar si Phantom está instalado
-                const provider = window?.phantom?.solana;
-                
-                if (!provider?.isPhantom) {
-                    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
-                        // Dispositivo móvil - Abrir Phantom App
-                        window.location.href = 'https://phantom.app/ul/browse';
-                        return;
-                    } else {
-                        // PC - Sugerir instalar extensión
-                        window.open('https://phantom.app', '_blank');
-                        showError('Por favor instala Phantom Wallet');
-                        return;
-                    }
-                }
+        // Variables globales
+        let publicKey = null;
+        let provider = null;
 
-                // Conectar a Phantom
-                const resp = await provider.connect();
-                publicKey = resp.publicKey.toString();
-                
-                // Actualizar UI
-                document.getElementById('walletStatus').textContent = `Conectado: ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
-                document.getElementById('connectBtn').style.display = 'none';
-                
-                // Enviar la dirección al bot de Telegram
-                tg.sendData(JSON.stringify({
-                    action: 'wallet_connected',
-                    publicKey: publicKey
-                }));
+        // Elementos del DOM
+        const connectBtn = document.getElementById('connectBtn');
+        const errorDiv = document.getElementById('error');
+        const successDiv = document.getElementById('success');
+        const statusDiv = document.getElementById('status');
+        const walletInfo = document.getElementById('walletInfo');
+        const walletAddress = document.getElementById('walletAddress');
+        const tokenBalances = document.getElementById('tokenBalances');
 
-                // Iniciar monitoreo de tokens
-                startMonitoring();
-            } catch (err) {
-                showError(`Error de conexión: ${err.message}`);
-            }
-        }
-
+        // Función para mostrar errores
         function showError(message) {
-            const errorDiv = document.getElementById('error');
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
             setTimeout(() => {
@@ -183,122 +123,144 @@
             }, 5000);
         }
 
-        async function startMonitoring() {
-            document.getElementById('status').textContent = 'Monitoreando tokens...';
-            
-            try {
-                // Obtener lista de tokens desde el bot de Telegram
-                tg.sendData(JSON.stringify({
-                    action: 'get_trending_tokens'
-                }));
+        // Función para mostrar mensajes de éxito
+        function showSuccess(message) {
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            setTimeout(() => {
+                successDiv.style.display = 'none';
+            }, 5000);
+        }
 
-                // El bot responderá con los tokens y sus análisis
-                // La respuesta se manejará en MainButton.onClick
-            } catch (error) {
-                showError('Error al iniciar monitoreo: ' + error.message);
+        // Función para conectar con Phantom
+        async function connectPhantom() {
+            try {
+                // Verificar si Phantom está instalado
+                if ("phantom" in window) {
+                    provider = window.phantom?.solana;
+
+                    if (provider?.isPhantom) {
+                        try {
+                            // Conectar a Phantom
+                            const resp = await provider.connect();
+                            publicKey = resp.publicKey.toString();
+
+                            // Actualizar UI
+                            connectBtn.style.display = 'none';
+                            statusDiv.textContent = 'Wallet conectada';
+                            walletAddress.textContent = `Dirección: ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
+                            walletInfo.style.display = 'block';
+
+                            // Notificar al bot
+                            tg.sendData(JSON.stringify({
+                                action: 'wallet_connected',
+                                publicKey: publicKey
+                            }));
+
+                            showSuccess('Wallet conectada exitosamente');
+                            
+                            // Obtener balances
+                            await getTokenBalances();
+                        } catch (err) {
+                            if (err.code === 4001) {
+                                showError('Conexión rechazada por el usuario');
+                            } else {
+                                showError(`Error al conectar: ${err.message}`);
+                            }
+                        }
+                    } else {
+                        showError('Phantom no está instalado');
+                    }
+                } else {
+                    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                        // Dispositivo móvil - Abrir Phantom App
+                        window.location.href = 'https://phantom.app/ul/browse';
+                    } else {
+                        // PC - Sugerir instalar extensión
+                        window.open('https://phantom.app', '_blank');
+                        showError('Por favor instala Phantom Wallet');
+                    }
+                }
+            } catch (err) {
+                showError(`Error: ${err.message}`);
             }
         }
 
-        // Manejar respuestas del bot
+        // Función para obtener balances de tokens
+        async function getTokenBalances() {
+            try {
+                if (!provider || !publicKey) {
+                    showError('Wallet no conectada');
+                    return;
+                }
+
+                // Obtener tokens de la wallet
+                const connection = new solanaWeb3.Connection(
+                    'https://api.mainnet-beta.solana.com',
+                    'confirmed'
+                );
+
+                const tokens = await connection.getParsedTokenAccountsByOwner(
+                    new solanaWeb3.PublicKey(publicKey),
+                    {
+                        programId: new solanaWeb3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+                    }
+                );
+
+                // Mostrar tokens
+                tokenBalances.innerHTML = '';
+                tokens.value.forEach(token => {
+                    const balance = token.account.data.parsed.info.tokenAmount;
+                    if (balance.uiAmount > 0) {
+                        const tokenElement = document.createElement('div');
+                        tokenElement.className = 'token-balance';
+                        tokenElement.innerHTML = `
+                            <div>Token: ${token.account.data.parsed.info.mint}</div>
+                            <div>Balance: ${balance.uiAmount}</div>
+                        `;
+                        tokenBalances.appendChild(tokenElement);
+                    }
+                });
+
+                // Enviar tokens al bot
+                tg.sendData(JSON.stringify({
+                    action: 'token_balances',
+                    tokens: tokens.value.map(t => ({
+                        mint: t.account.data.parsed.info.mint,
+                        amount: t.account.data.parsed.info.tokenAmount.uiAmount
+                    }))
+                }));
+
+            } catch (err) {
+                showError(`Error obteniendo balances: ${err.message}`);
+            }
+        }
+
+        // Event Listeners
+        connectBtn.addEventListener('click', connectPhantom);
+
+        // Manejar mensajes del bot
         tg.onEvent('mainButtonClicked', function() {
             const data = tg.initDataUnsafe?.data;
             if (!data) return;
 
             try {
                 const parsedData = JSON.parse(data);
-                switch (parsedData.type) {
-                    case 'tokens':
-                        displayTokens(parsedData.tokens);
+                switch (parsedData.action) {
+                    case 'refresh_balances':
+                        getTokenBalances();
                         break;
-                    case 'trade_signal':
-                        executeTrade(parsedData.token, parsedData.action);
+                    case 'disconnect':
+                        provider?.disconnect();
+                        connectBtn.style.display = 'block';
+                        walletInfo.style.display = 'none';
+                        statusDiv.textContent = 'Esperando conexión...';
                         break;
                 }
             } catch (error) {
-                console.error('Error procesando datos:', error);
+                console.error('Error procesando mensaje:', error);
             }
         });
-
-        function displayTokens(tokens) {
-            const tokenList = document.getElementById('tokenList');
-            tokenList.innerHTML = '';
-
-            tokens.forEach(token => {
-                const tokenElement = document.createElement('div');
-                tokenElement.className = 'token-item';
-                
-                const priceChangeClass = token.priceChange24h >= 0 ? 'positive' : 'negative';
-                const priceChangeSign = token.priceChange24h >= 0 ? '+' : '';
-
-                tokenElement.innerHTML = `
-                    <div class="price-change ${priceChangeClass}">
-                        ${priceChangeSign}${token.priceChange24h.toFixed(2)}%
-                    </div>
-                    <h3>${token.symbol}</h3>
-                    <div class="details">
-                        <div>Precio: $${token.price.toFixed(6)}</div>
-                        <div>Volumen 24h: $${formatNumber(token.volume24h)}</div>
-                        <div>Análisis: ${token.analysis}</div>
-                    </div>
-                `;
-
-                tokenList.appendChild(tokenElement);
-            });
-        }
-
-        async function executeTrade(token, action) {
-            try {
-                const provider = window?.phantom?.solana;
-                if (!provider?.isPhantom) {
-                    showError('Phantom no está conectado');
-                    return;
-                }
-
-                // Crear y enviar la transacción
-                const transaction = action === 'buy' ? 
-                    await createBuyTransaction(token) :
-                    await createSellTransaction(token);
-
-                // Firmar y enviar transacción
-                const signature = await provider.signAndSendTransaction(transaction);
-
-                // Notificar al bot
-                tg.sendData(JSON.stringify({
-                    action: 'trade_executed',
-                    token: token.symbol,
-                    type: action,
-                    signature
-                }));
-
-                addToTradeHistory(action, token);
-            } catch (error) {
-                showError(`Error en transacción: ${error.message}`);
-            }
-        }
-
-        function addToTradeHistory(action, token) {
-            const historyDiv = document.getElementById('tradeHistory');
-            const tradeItem = document.createElement('div');
-            tradeItem.className = 'trade-item';
-            
-            tradeItem.innerHTML = `
-                ${action.toUpperCase()}: ${token.symbol}
-                Precio: $${token.price.toFixed(6)}
-                Timestamp: ${new Date().toLocaleString()}
-            `;
-            
-            historyDiv.insertBefore(tradeItem, historyDiv.firstChild);
-        }
-
-        function formatNumber(num) {
-            return new Intl.NumberFormat('en-US', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            }).format(num);
-        }
-
-        // Event Listeners
-        document.getElementById('connectBtn').addEventListener('click', connectPhantom);
     </script>
 </body>
 </html> 
