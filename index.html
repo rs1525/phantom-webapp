@@ -434,9 +434,18 @@
                         debugInfo('Procesando datos de retorno de Phantom');
                         
                         // En un caso real, aquí se decodificaría el mensaje cifrado
-                        // Para simplificar, vamos a extraer la clave pública del parámetro phantomPublicKey
+                        // Para simplificar, vamos a usar directamente el phantomPublicKey como la clave pública
                         // Esto es una simplificación, en producción se debe implementar la decodificación correcta
+                        
+                        // Extraer la clave pública del parámetro data (simulado)
+                        // En una implementación real, esto vendría de descifrar el mensaje
                         publicKey = phantomPublicKey;
+                        
+                        // Verificar que tenemos una clave pública válida
+                        if (!publicKey || publicKey.length < 32) {
+                            throw new Error('Clave pública inválida o incompleta');
+                        }
+                        
                         debugInfo(`Clave pública obtenida: ${publicKey}`);
                         
                         // Actualizar UI
@@ -533,69 +542,17 @@
                 const appUrl = encodeURIComponent(window.location.href);
                 debugInfo(`URL de retorno: ${appUrl}`);
                 
-                // Construir el deeplink para Phantom
-                const phantomDeepLink = `phantom://ul/v1/connect?app_url=${appUrl}`;
-                debugInfo(`Deeplink generado: ${phantomDeepLink}`);
+                // Construir el deeplink para Phantom - formato web que funciona mejor en la mayoría de dispositivos
+                const webDeepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}`;
+                debugInfo(`Usando web link directo: ${webDeepLink}`);
                 
                 // Mostrar mensaje al usuario
                 showInfo('Abriendo Phantom Wallet...');
                 statusDiv.textContent = 'Redirigiendo a Phantom Wallet...';
                 
-                // Crear un iframe oculto para intentar abrir la app sin cambiar la página actual
-                // Esto permite un mejor manejo de errores
-                const iframe = document.createElement('iframe');
-                iframe.style.display = 'none';
-                document.body.appendChild(iframe);
-                
-                // Intentar abrir Phantom
-                debugInfo('Intentando abrir Phantom con deeplink...');
-                
-                // Primero intentamos con el iframe
-                try {
-                    iframe.src = phantomDeepLink;
-                } catch (e) {
-                    debugInfo(`Error con iframe: ${e.message}`);
-                }
-                
-                // Luego intentamos con window.location después de un breve retraso
-                setTimeout(() => {
-                    window.location.href = phantomDeepLink;
-                    
-                    // Si después de 3 segundos seguimos en la misma página, probablemente Phantom no está instalado
-                    setTimeout(() => {
-                        if (document.visibilityState !== 'hidden') {
-                            debugInfo('Phantom no se abrió, intentando con formato web...');
-                            
-                            // Intentar con el formato web como respaldo
-                            const webDeepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}`;
-                            showInfo('Intentando abrir Phantom vía web...');
-                            debugInfo(`Usando web link: ${webDeepLink}`);
-                            window.location.href = webDeepLink;
-                            
-                            // Si aún no funciona, ofrecer instalar Phantom
-                            setTimeout(() => {
-                                if (document.visibilityState !== 'hidden') {
-                                    debugInfo('Phantom no se abrió, ofreciendo instalación...');
-                                    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-                                    const storeUrl = isIOS 
-                                        ? 'https://apps.apple.com/app/phantom-solana-wallet/id1598432977'
-                                        : 'https://play.google.com/store/apps/details?id=app.phantom';
-                                    
-                                    showError('No se pudo abrir Phantom. ¿Tienes la app instalada?');
-                                    statusDiv.textContent = 'Error al conectar con Phantom';
-                                    
-                                    // Cambiar el botón para instalar Phantom
-                                    connectBtn.textContent = 'Instalar Phantom';
-                                    connectBtn.onclick = () => {
-                                        window.location.href = storeUrl;
-                                    };
-                                }
-                            }, 3000);
-                        } else {
-                            debugInfo('La página cambió de visibilidad, posiblemente Phantom se abrió');
-                        }
-                    }, 3000);
-                }, 500);
+                // Redirigir directamente sin iframe ni timeouts adicionales
+                debugInfo('Redirigiendo directamente a Phantom...');
+                window.location.href = webDeepLink;
             } catch (err) {
                 const errorMsg = `Error al conectar: ${err.message}`;
                 debugInfo(errorMsg);
