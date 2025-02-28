@@ -208,17 +208,32 @@
         // Detectar Phantom
         async function detectPhantom() {
             try {
+                // Verificar si estamos en un dispositivo móvil
+                const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+                debugInfo(`Verificando Phantom en ${isMobile ? 'móvil' : 'PC'}`);
+                
+                // En móvil, no podemos detectar la app directamente, así que asumimos que está disponible
+                // y permitimos intentar la conexión
+                if (isMobile) {
+                    debugInfo('En dispositivo móvil, permitiendo conexión directa');
+                    return true;
+                }
+                
+                // En PC, verificamos la extensión
                 if ("phantom" in window) {
                     const provider = window.phantom?.solana;
                     
                     if (provider?.isPhantom) {
+                        debugInfo('Extensión Phantom detectada en PC');
                         return true;
                     }
                 }
                 
+                debugInfo('Phantom no detectado');
                 return false;
             } catch (err) {
                 console.error("Error detectando Phantom:", err);
+                debugInfo(`Error detectando Phantom: ${err.message}`);
                 return false;
             }
         }
@@ -511,52 +526,80 @@
         function handleMobileDevice() {
             showInfo('Detectado dispositivo móvil');
             statusDiv.textContent = 'Preparando conexión con Phantom...';
-            
-            // Crear URL para deeplink según la documentación oficial de Phantom
-            // https://docs.phantom.app/integrating/deeplinks-ios-and-android
+            debugInfo('Iniciando proceso de conexión móvil');
             
             try {
                 // Construir la URL de retorno (esta misma página)
                 const appUrl = encodeURIComponent(window.location.href);
+                debugInfo(`URL de retorno: ${appUrl}`);
                 
                 // Construir el deeplink para Phantom
-                // Formato correcto: phantom://ul/v1/connect?app_url=RETURN_URL
                 const phantomDeepLink = `phantom://ul/v1/connect?app_url=${appUrl}`;
+                debugInfo(`Deeplink generado: ${phantomDeepLink}`);
                 
                 // Mostrar mensaje al usuario
                 showInfo('Abriendo Phantom Wallet...');
                 statusDiv.textContent = 'Redirigiendo a Phantom Wallet...';
                 
-                // Redirigir a la app de Phantom
+                // Crear un iframe oculto para intentar abrir la app sin cambiar la página actual
+                // Esto permite un mejor manejo de errores
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                document.body.appendChild(iframe);
+                
+                // Intentar abrir Phantom
+                debugInfo('Intentando abrir Phantom con deeplink...');
+                
+                // Primero intentamos con el iframe
+                try {
+                    iframe.src = phantomDeepLink;
+                } catch (e) {
+                    debugInfo(`Error con iframe: ${e.message}`);
+                }
+                
+                // Luego intentamos con window.location después de un breve retraso
                 setTimeout(() => {
                     window.location.href = phantomDeepLink;
                     
                     // Si después de 3 segundos seguimos en la misma página, probablemente Phantom no está instalado
                     setTimeout(() => {
                         if (document.visibilityState !== 'hidden') {
+                            debugInfo('Phantom no se abrió, intentando con formato web...');
+                            
                             // Intentar con el formato web como respaldo
                             const webDeepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}`;
                             showInfo('Intentando abrir Phantom vía web...');
+                            debugInfo(`Usando web link: ${webDeepLink}`);
                             window.location.href = webDeepLink;
                             
                             // Si aún no funciona, ofrecer instalar Phantom
                             setTimeout(() => {
                                 if (document.visibilityState !== 'hidden') {
+                                    debugInfo('Phantom no se abrió, ofreciendo instalación...');
                                     const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
                                     const storeUrl = isIOS 
                                         ? 'https://apps.apple.com/app/phantom-solana-wallet/id1598432977'
                                         : 'https://play.google.com/store/apps/details?id=app.phantom';
                                     
-                                    if (confirm('No se pudo abrir Phantom. ¿Deseas instalarlo?')) {
+                                    showError('No se pudo abrir Phantom. ¿Tienes la app instalada?');
+                                    statusDiv.textContent = 'Error al conectar con Phantom';
+                                    
+                                    // Cambiar el botón para instalar Phantom
+                                    connectBtn.textContent = 'Instalar Phantom';
+                                    connectBtn.onclick = () => {
                                         window.location.href = storeUrl;
-                                    }
+                                    };
                                 }
                             }, 3000);
+                        } else {
+                            debugInfo('La página cambió de visibilidad, posiblemente Phantom se abrió');
                         }
                     }, 3000);
                 }, 500);
             } catch (err) {
-                showError(`Error al conectar: ${err.message}`);
+                const errorMsg = `Error al conectar: ${err.message}`;
+                debugInfo(errorMsg);
+                showError(errorMsg);
                 console.error('Error completo:', err);
             }
         }
