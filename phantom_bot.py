@@ -231,6 +231,7 @@ class TokenAnalyzer:
 class PhantomBot:
     def __init__(self):
         self.token_analyzer = TokenAnalyzer()
+        self.connected_wallets = {}  # Almacenar wallets conectadas por usuario_id
 
     def get_main_keyboard(self):
         """Obtener teclado principal con botón de Web App"""
@@ -242,14 +243,21 @@ class PhantomBot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /start"""
+        user_id = update.effective_user.id
+        
         welcome_message = (
             "🤖 *Bienvenido al Bot de Trading en Solana*\n\n"
             "Este bot te ayuda a:\n"
-            "• Conectar tu Phantom Wallet de forma segura\n"
-            "• Ver tokens en tendencia\n"
-            "• Analizar tokens antes de invertir\n\n"
+            "• Conectar tu Phantom Wallet\n"
+            "• Ver tus tokens y balances\n"
+            "• Analizar tokens en tendencia\n\n"
             "Para comenzar, usa el botón '🔗 Conectar Phantom'"
         )
+        
+        # Limpiar datos anteriores del usuario
+        if user_id in self.connected_wallets:
+            del self.connected_wallets[user_id]
+        
         await update.message.reply_text(
             welcome_message,
             parse_mode='Markdown',
@@ -262,7 +270,9 @@ class PhantomBot:
             "📚 *Comandos disponibles:*\n\n"
             "/start - Iniciar el bot\n"
             "/trending - Ver tokens en tendencia\n"
-            "/analyze <dirección> - Analizar un token específico\n\n"
+            "/analyze <dirección> - Analizar un token específico\n"
+            "/portfolio - Ver tu portfolio de tokens\n"
+            "/disconnect - Desconectar tu wallet\n\n"
             "🔒 *Seguridad:*\n"
             "• Nunca compartimos tus claves privadas\n"
             "• Todas las transacciones requieren tu confirmación\n"
@@ -346,43 +356,105 @@ class PhantomBot:
     async def handle_webapp_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Manejar datos de la Web App"""
         try:
+            user_id = update.effective_user.id
             data = json.loads(update.message.web_app_data.data)
             
             if data.get('action') == 'wallet_connected':
                 # Guardar dirección de wallet
-                context.user_data['wallet'] = data['publicKey']
+                wallet_address = data['publicKey']
+                self.connected_wallets[user_id] = wallet_address
+                
                 await update.message.reply_text(
-                    f"✅ Wallet conectada exitosamente!\n"
-                    f"Dirección: `{data['publicKey']}`",
+                    f"✅ *Wallet conectada exitosamente*\n"
+                    f"Dirección: `{wallet_address}`\n\n"
+                    f"Usa /portfolio para ver tus tokens",
                     parse_mode='Markdown'
                 )
             
             elif data.get('action') == 'token_balances':
-                # Procesar balances de tokens
-                tokens = data.get('tokens', [])
-                if not tokens:
-                    await update.message.reply_text("No se encontraron tokens")
+                if user_id not in self.connected_wallets:
+                    await update.message.reply_text(
+                        "❌ No hay wallet conectada. Usa el botón 'Conectar Phantom'"
+                    )
                     return
 
-                response = ["💰 *Tus Tokens*\n"]
+                tokens = data.get('tokens', [])
+                if not tokens:
+                    await update.message.reply_text(
+                        "📝 No se encontraron tokens en tu wallet"
+                    )
+                    return
+
+                response = ["💰 *Tu Portfolio*\n"]
+                total_value = 0
+
                 for token in tokens:
                     if token['amount'] > 0:
                         token_info = await self.token_analyzer.get_token_info(token['mint'])
                         if token_info:
                             value = token['amount'] * token_info['price']
+                            total_value += value
+                            price_change = token_info['price_change_24h']
+                            emoji = "🟢" if price_change >= 0 else "🔴"
+                            
                             response.append(
                                 f"\n*{token_info['symbol']}*\n"
                                 f"• Cantidad: {token['amount']:,.4f}\n"
+                                f"• Precio: ${token_info['price']:.6f}\n"
+                                f"• Cambio 24h: {emoji}{price_change:+.2f}%\n"
                                 f"• Valor: ${value:,.2f}"
                             )
 
-                await update.message.reply_text(
-                    "\n".join(response),
-                    parse_mode='Markdown'
-                )
+                response.append(f"\n\n💵 *Valor Total:* ${total_value:,.2f}")
+                
+                # Enviar en chunks si es necesario
+                message = "\n".join(response)
+                if len(message) > 4096:
+                    for i in range(0, len(message), 4096):
+                        await update.message.reply_text(
+                            message[i:i+4096],
+                            parse_mode='Markdown'
+                        )
+                else:
+                    await update.message.reply_text(message, parse_mode='Markdown')
 
+        except json.JSONDecodeError:
+            await update.message.reply_text("❌ Error: Datos inválidos de la Web App")
         except Exception as e:
             await update.message.reply_text(f"❌ Error: {str(e)}")
+
+    async def portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Comando /portfolio"""
+        user_id = update.effective_user.id
+        
+        if user_id not in self.connected_wallets:
+            await update.message.reply_text(
+                "❌ No hay wallet conectada\n"
+                "Usa el botón '🔗 Conectar Phantom' primero",
+                reply_markup=self.get_main_keyboard()
+            )
+            return
+            
+        await update.message.reply_text(
+            "🔄 Actualizando portfolio...\n"
+            "Por favor espera mientras obtengo la información"
+        )
+
+    async def disconnect(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Comando /disconnect"""
+        user_id = update.effective_user.id
+        
+        if user_id in self.connected_wallets:
+            del self.connected_wallets[user_id]
+            await update.message.reply_text(
+                "✅ Wallet desconectada exitosamente",
+                reply_markup=self.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ No hay wallet conectada",
+                reply_markup=self.get_main_keyboard()
+            )
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Manejar mensajes de texto"""
@@ -405,6 +477,8 @@ def main():
     app.add_handler(CommandHandler("help", bot.help_command))
     app.add_handler(CommandHandler("trending", bot.trending))
     app.add_handler(CommandHandler("analyze", bot.analyze))
+    app.add_handler(CommandHandler("portfolio", bot.portfolio))
+    app.add_handler(CommandHandler("disconnect", bot.disconnect))
 
     # Mensajes
     app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, bot.handle_webapp_data))
@@ -412,7 +486,7 @@ def main():
 
     # Iniciar bot
     print("Bot iniciado...")
-    app.run_polling()
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main() 

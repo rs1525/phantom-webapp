@@ -102,8 +102,9 @@
         tg.ready();
 
         // Variables globales
+        let phantomProvider = null;
         let publicKey = null;
-        let provider = null;
+        let connection = null;
 
         // Elementos del DOM
         const connectBtn = document.getElementById('connectBtn');
@@ -115,91 +116,130 @@
         const tokenBalances = document.getElementById('tokenBalances');
 
         // Función para mostrar errores
-        function showError(message) {
+        function showError(message, duration = 5000) {
             errorDiv.textContent = message;
             errorDiv.style.display = 'block';
             setTimeout(() => {
                 errorDiv.style.display = 'none';
-            }, 5000);
+            }, duration);
         }
 
         // Función para mostrar mensajes de éxito
-        function showSuccess(message) {
+        function showSuccess(message, duration = 5000) {
             successDiv.textContent = message;
             successDiv.style.display = 'block';
             setTimeout(() => {
                 successDiv.style.display = 'none';
-            }, 5000);
+            }, duration);
+        }
+
+        // Función para detectar Phantom
+        async function detectPhantom() {
+            try {
+                if ("phantom" in window) {
+                    const provider = window.phantom?.solana;
+                    
+                    if (provider?.isPhantom) {
+                        phantomProvider = provider;
+                        return true;
+                    }
+                }
+                return false;
+            } catch (err) {
+                console.error("Error detectando Phantom:", err);
+                return false;
+            }
+        }
+
+        // Función para manejar dispositivos móviles
+        function handleMobileDevice() {
+            const userAgent = navigator.userAgent.toLowerCase();
+            const isMobile = /iphone|ipad|ipod|android/.test(userAgent);
+            
+            if (isMobile) {
+                // Generar deep link para Phantom
+                const dappUrl = encodeURIComponent(window.location.href);
+                const phantomUrl = `https://phantom.app/ul/browse/${dappUrl}`;
+                
+                // Redirigir a la app de Phantom
+                window.location.href = phantomUrl;
+                return true;
+            }
+            return false;
         }
 
         // Función para conectar con Phantom
         async function connectPhantom() {
             try {
-                // Verificar si Phantom está instalado
-                if ("phantom" in window) {
-                    provider = window.phantom?.solana;
+                statusDiv.textContent = 'Conectando...';
+                connectBtn.disabled = true;
 
-                    if (provider?.isPhantom) {
-                        try {
-                            // Conectar a Phantom
-                            const resp = await provider.connect();
-                            publicKey = resp.publicKey.toString();
+                // Verificar si estamos en móvil
+                if (handleMobileDevice()) {
+                    return;
+                }
 
-                            // Actualizar UI
-                            connectBtn.style.display = 'none';
-                            statusDiv.textContent = 'Wallet conectada';
-                            walletAddress.textContent = `Dirección: ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
-                            walletInfo.style.display = 'block';
+                // Detectar Phantom
+                const isPhantomInstalled = await detectPhantom();
+                if (!isPhantomInstalled) {
+                    showError('Phantom no está instalado. Por favor instala la extensión.');
+                    window.open('https://phantom.app', '_blank');
+                    return;
+                }
 
-                            // Notificar al bot
-                            tg.sendData(JSON.stringify({
-                                action: 'wallet_connected',
-                                publicKey: publicKey
-                            }));
+                try {
+                    // Conectar a Phantom
+                    const resp = await phantomProvider.connect();
+                    publicKey = resp.publicKey.toString();
 
-                            showSuccess('Wallet conectada exitosamente');
-                            
-                            // Obtener balances
-                            await getTokenBalances();
-                        } catch (err) {
-                            if (err.code === 4001) {
-                                showError('Conexión rechazada por el usuario');
-                            } else {
-                                showError(`Error al conectar: ${err.message}`);
-                            }
-                        }
+                    // Inicializar conexión Solana
+                    connection = new solanaWeb3.Connection(
+                        'https://api.mainnet-beta.solana.com',
+                        'confirmed'
+                    );
+
+                    // Actualizar UI
+                    connectBtn.style.display = 'none';
+                    statusDiv.textContent = 'Wallet conectada';
+                    walletAddress.textContent = `Dirección: ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
+                    walletInfo.style.display = 'block';
+
+                    // Notificar al bot
+                    tg.sendData(JSON.stringify({
+                        action: 'wallet_connected',
+                        publicKey: publicKey
+                    }));
+
+                    showSuccess('Wallet conectada exitosamente');
+                    
+                    // Obtener balances
+                    await getTokenBalances();
+
+                } catch (err) {
+                    if (err.code === 4001) {
+                        showError('Conexión rechazada por el usuario');
                     } else {
-                        showError('Phantom no está instalado');
-                    }
-                } else {
-                    if (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
-                        // Dispositivo móvil - Abrir Phantom App
-                        window.location.href = 'https://phantom.app/ul/browse';
-                    } else {
-                        // PC - Sugerir instalar extensión
-                        window.open('https://phantom.app', '_blank');
-                        showError('Por favor instala Phantom Wallet');
+                        showError(`Error al conectar: ${err.message}`);
                     }
                 }
             } catch (err) {
                 showError(`Error: ${err.message}`);
+            } finally {
+                connectBtn.disabled = false;
             }
         }
 
         // Función para obtener balances de tokens
         async function getTokenBalances() {
             try {
-                if (!provider || !publicKey) {
+                if (!phantomProvider || !publicKey || !connection) {
                     showError('Wallet no conectada');
                     return;
                 }
 
-                // Obtener tokens de la wallet
-                const connection = new solanaWeb3.Connection(
-                    'https://api.mainnet-beta.solana.com',
-                    'confirmed'
-                );
+                statusDiv.textContent = 'Obteniendo tokens...';
 
+                // Obtener tokens de la wallet
                 const tokens = await connection.getParsedTokenAccountsByOwner(
                     new solanaWeb3.PublicKey(publicKey),
                     {
@@ -209,7 +249,9 @@
 
                 // Mostrar tokens
                 tokenBalances.innerHTML = '';
-                tokens.value.forEach(token => {
+                const tokensList = [];
+
+                for (const token of tokens.value) {
                     const balance = token.account.data.parsed.info.tokenAmount;
                     if (balance.uiAmount > 0) {
                         const tokenElement = document.createElement('div');
@@ -219,25 +261,41 @@
                             <div>Balance: ${balance.uiAmount}</div>
                         `;
                         tokenBalances.appendChild(tokenElement);
+
+                        tokensList.push({
+                            mint: token.account.data.parsed.info.mint,
+                            amount: balance.uiAmount
+                        });
                     }
-                });
+                }
 
                 // Enviar tokens al bot
-                tg.sendData(JSON.stringify({
-                    action: 'token_balances',
-                    tokens: tokens.value.map(t => ({
-                        mint: t.account.data.parsed.info.mint,
-                        amount: t.account.data.parsed.info.tokenAmount.uiAmount
-                    }))
-                }));
+                if (tokensList.length > 0) {
+                    tg.sendData(JSON.stringify({
+                        action: 'token_balances',
+                        tokens: tokensList
+                    }));
+                    statusDiv.textContent = 'Tokens actualizados';
+                } else {
+                    statusDiv.textContent = 'No se encontraron tokens';
+                }
 
             } catch (err) {
                 showError(`Error obteniendo balances: ${err.message}`);
+                statusDiv.textContent = 'Error al obtener tokens';
             }
         }
 
         // Event Listeners
         connectBtn.addEventListener('click', connectPhantom);
+
+        // Detectar Phantom al cargar
+        window.addEventListener('load', async () => {
+            const isPhantomInstalled = await detectPhantom();
+            if (!isPhantomInstalled && !handleMobileDevice()) {
+                connectBtn.textContent = 'Instalar Phantom';
+            }
+        });
 
         // Manejar mensajes del bot
         tg.onEvent('mainButtonClicked', function() {
@@ -251,16 +309,40 @@
                         getTokenBalances();
                         break;
                     case 'disconnect':
-                        provider?.disconnect();
-                        connectBtn.style.display = 'block';
-                        walletInfo.style.display = 'none';
-                        statusDiv.textContent = 'Esperando conexión...';
+                        if (phantomProvider) {
+                            phantomProvider.disconnect();
+                            connectBtn.style.display = 'block';
+                            walletInfo.style.display = 'none';
+                            statusDiv.textContent = 'Esperando conexión...';
+                            publicKey = null;
+                        }
                         break;
                 }
             } catch (error) {
                 console.error('Error procesando mensaje:', error);
             }
         });
+
+        // Manejar cambios de conexión de Phantom
+        if (window.phantom?.solana) {
+            window.phantom.solana.on('connect', () => {
+                showSuccess('Wallet conectada');
+            });
+
+            window.phantom.solana.on('disconnect', () => {
+                connectBtn.style.display = 'block';
+                walletInfo.style.display = 'none';
+                statusDiv.textContent = 'Wallet desconectada';
+                publicKey = null;
+            });
+
+            window.phantom.solana.on('accountChanged', (publicKey) => {
+                if (publicKey) {
+                    showSuccess('Cuenta cambiada');
+                    getTokenBalances();
+                }
+            });
+        }
     </script>
 </body>
 </html> 
