@@ -150,22 +150,33 @@ class TokenAnalyzer:
     async def get_trending_tokens(self) -> list:
         """Obtener tokens en tendencia usando Raydium"""
         try:
+            # Obtener pares de trading de Raydium
             url = f"{Config.RAYDIUM_API_BASE}/pairs"
             response = requests.get(url)
-            data = response.json()
+            pairs_data = response.json()
             
-            if not data:
+            if not isinstance(pairs_data, list):
                 return []
 
-            # Ordenar por volumen
-            pairs = sorted(data, key=lambda x: float(x.get('volume24h', 0)), reverse=True)
+            # Filtrar y ordenar por volumen
+            valid_pairs = []
+            for pair in pairs_data:
+                try:
+                    volume = float(pair.get('volume24h', 0))
+                    if volume > 0 and 'tokenInfo' in pair:
+                        valid_pairs.append({
+                            'volume': volume,
+                            'token': pair['tokenInfo']
+                        })
+                except (ValueError, TypeError):
+                    continue
+
+            # Ordenar por volumen y tomar los top 10
+            valid_pairs.sort(key=lambda x: x['volume'], reverse=True)
             trending = []
 
-            for pair in pairs[:10]:  # Top 10 tokens
-                if 'tokenInfo' not in pair:
-                    continue
-                    
-                token = pair['tokenInfo']
+            for pair_data in valid_pairs[:10]:
+                token = pair_data['token']
                 token_info = await self.get_token_info(token['mint'])
                 
                 if token_info:
@@ -366,10 +377,21 @@ class PhantomBot:
                 
                 await update.message.reply_text(
                     f"✅ *Wallet conectada exitosamente*\n"
-                    f"Dirección: `{wallet_address}`\n\n"
-                    f"Usa /portfolio para ver tus tokens",
+                    f"Dirección: `{wallet_address[:6]}...{wallet_address[-4:]}`\n\n"
+                    f"Ahora puedes:\n"
+                    f"• Ver tu portfolio con /portfolio\n"
+                    f"• Analizar tokens con /analyze\n"
+                    f"• Ver tokens en tendencia con /trending",
                     parse_mode='Markdown'
                 )
+            
+            elif data.get('action') == 'wallet_disconnected':
+                if user_id in self.connected_wallets:
+                    del self.connected_wallets[user_id]
+                    await update.message.reply_text(
+                        "✅ Wallet desconectada exitosamente",
+                        reply_markup=self.get_main_keyboard()
+                    )
             
             elif data.get('action') == 'token_balances':
                 if user_id not in self.connected_wallets:
@@ -390,19 +412,27 @@ class PhantomBot:
 
                 for token in tokens:
                     if token['amount'] > 0:
-                        token_info = await self.token_analyzer.get_token_info(token['mint'])
-                        if token_info:
-                            value = token['amount'] * token_info['price']
-                            total_value += value
-                            price_change = token_info['price_change_24h']
-                            emoji = "🟢" if price_change >= 0 else "🔴"
-                            
+                        try:
+                            token_info = await self.token_analyzer.get_token_info(token['mint'])
+                            if token_info:
+                                value = token['amount'] * token_info['price']
+                                total_value += value
+                                price_change = token_info['price_change_24h']
+                                emoji = "🟢" if price_change >= 0 else "🔴"
+                                
+                                response.append(
+                                    f"\n*{token_info['symbol']}*\n"
+                                    f"• Cantidad: {token['amount']:,.4f}\n"
+                                    f"• Precio: ${token_info['price']:.6f}\n"
+                                    f"• Cambio 24h: {emoji}{price_change:+.2f}%\n"
+                                    f"• Valor: ${value:,.2f}"
+                                )
+                        except Exception as e:
+                            print(f"Error procesando token {token['mint']}: {str(e)}")
                             response.append(
-                                f"\n*{token_info['symbol']}*\n"
+                                f"\n*Token {token['mint'][:6]}...{token['mint'][-4:]}*\n"
                                 f"• Cantidad: {token['amount']:,.4f}\n"
-                                f"• Precio: ${token_info['price']:.6f}\n"
-                                f"• Cambio 24h: {emoji}{price_change:+.2f}%\n"
-                                f"• Valor: ${value:,.2f}"
+                                f"• Error: No se pudo obtener información"
                             )
 
                 response.append(f"\n\n💵 *Valor Total:* ${total_value:,.2f}")
@@ -422,6 +452,7 @@ class PhantomBot:
             await update.message.reply_text("❌ Error: Datos inválidos de la Web App")
         except Exception as e:
             await update.message.reply_text(f"❌ Error: {str(e)}")
+            print(f"Error completo: {str(e)}")
 
     async def portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Comando /portfolio"""
@@ -434,10 +465,19 @@ class PhantomBot:
                 reply_markup=self.get_main_keyboard()
             )
             return
-            
+        
+        wallet_address = self.connected_wallets[user_id]
+        
         await update.message.reply_text(
-            "🔄 Actualizando portfolio...\n"
-            "Por favor espera mientras obtengo la información"
+            f"🔄 Obteniendo tokens de la wallet `{wallet_address[:6]}...{wallet_address[-4:]}`\n"
+            f"Por favor espera un momento...",
+            parse_mode='Markdown'
+        )
+        
+        # Enviar mensaje para abrir la Web App y obtener tokens
+        await update.message.reply_text(
+            "Para ver tus tokens actualizados, haz clic en el botón 'Conectar Phantom'",
+            reply_markup=self.get_main_keyboard()
         )
 
     async def disconnect(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
