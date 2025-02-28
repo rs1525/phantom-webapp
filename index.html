@@ -191,8 +191,31 @@
             }
         }
 
+        // Verificar si estamos en Telegram WebApp
+        function isTelegramWebApp() {
+            return window.Telegram && window.Telegram.WebApp;
+        }
+
         // Inicializar la aplicación
         async function initApp() {
+            // Verificar si estamos en Telegram WebApp
+            if (!isTelegramWebApp()) {
+                showError('Esta aplicación debe abrirse desde Telegram');
+                connectBtn.disabled = true;
+                return;
+            }
+            
+            // Verificar si venimos de un deeplink de Phantom (retorno)
+            const urlParams = new URLSearchParams(window.location.search);
+            const phantomPublicKey = urlParams.get('phantom_encryption_public_key');
+            const data = urlParams.get('data');
+            
+            // Si tenemos datos de retorno, procesar automáticamente
+            if (phantomPublicKey && data) {
+                connectPhantom();
+                return;
+            }
+            
             // Verificar si Phantom está disponible
             const isPhantomAvailable = await detectPhantom();
             
@@ -280,19 +303,77 @@
                 // Verificar si estamos en un dispositivo móvil
                 const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
                 
+                // Verificar si venimos de un deeplink de Phantom (retorno)
+                const urlParams = new URLSearchParams(window.location.search);
+                const phantomPublicKey = urlParams.get('phantom_encryption_public_key');
+                const data = urlParams.get('data');
+                const session = urlParams.get('session');
+                const errorCode = urlParams.get('errorCode');
+                const errorMessage = urlParams.get('errorMessage');
+                
+                // Verificar si hay un error en el retorno
+                if (errorCode || errorMessage) {
+                    showError(`Error de Phantom: ${errorMessage || `Código ${errorCode}`}`);
+                    return;
+                }
+                
+                // Verificar si venimos de un retorno de Phantom
+                if (phantomPublicKey && data) {
+                    try {
+                        // Verificar la sesión si existe
+                        const savedSession = localStorage.getItem('phantom_session_id');
+                        if (session && savedSession && session !== savedSession) {
+                            showError('Sesión inválida');
+                            return;
+                        }
+                        
+                        // Limpiar la sesión
+                        localStorage.removeItem('phantom_session_id');
+                        
+                        // En un caso real, aquí se decodificaría el mensaje cifrado
+                        // Para simplificar, asumimos que data contiene la clave pública
+                        publicKey = data;
+                        
+                        // Actualizar UI
+                        connectBtn.textContent = 'Wallet Conectada';
+                        connectBtn.disabled = true;
+                        walletInfo.style.display = 'block';
+                        walletAddress.textContent = `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
+                        
+                        // Mostrar mensaje de éxito
+                        showSuccess('Conectado a Phantom (Mobile)');
+                        statusDiv.textContent = 'Wallet conectada';
+                        
+                        // Obtener tokens
+                        await getTokenBalances();
+                        
+                        // Enviar información al bot de Telegram
+                        tg.sendData(JSON.stringify({
+                            action: 'wallet_connected',
+                            publicKey: publicKey
+                        }));
+                        
+                        return;
+                    } catch (err) {
+                        showError(`Error procesando datos de retorno: ${err.message}`);
+                        console.error('Error completo:', err);
+                    }
+                }
+                
+                // Si estamos en móvil y no venimos de un deeplink, iniciar el proceso
                 if (isMobile) {
                     handleMobileDevice();
                     return;
                 }
 
-                // Verificar si Phantom está instalado
+                // En PC, verificar si Phantom está instalado
                 if (!window.solana || !window.solana.isPhantom) {
                     showError('Phantom no está instalado. Por favor instala la extensión de Phantom.');
                     window.open('https://phantom.app/', '_blank');
                     return;
                 }
 
-                // Conectar con Phantom
+                // Conectar con Phantom en PC
                 const resp = await window.solana.connect();
                 publicKey = resp.publicKey.toString();
                 
@@ -304,6 +385,7 @@
                 
                 // Mostrar mensaje de éxito
                 showSuccess('Conectado a Phantom');
+                statusDiv.textContent = 'Wallet conectada';
                 
                 // Obtener tokens
                 await getTokenBalances();
@@ -328,49 +410,33 @@
         function handleMobileDevice() {
             showInfo('Detectado dispositivo móvil');
             
-            // Verificar si la app de Phantom está instalada
-            const hasPhantomApp = window.solana && window.solana.isPhantom;
+            // Verificar si estamos en el navegador de Telegram
+            const isTelegramBrowser = isTelegramWebApp();
             
-            if (hasPhantomApp) {
-                // Si la app está instalada, intentar conectar
-                connectBtn.textContent = 'Conectando...';
-                window.solana.connect()
-                    .then(resp => {
-                        publicKey = resp.publicKey.toString();
-                        connectBtn.textContent = 'Wallet Conectada';
-                        connectBtn.disabled = true;
-                        walletInfo.style.display = 'block';
-                        walletAddress.textContent = `${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`;
-                        showSuccess('Conectado a Phantom');
-                        getTokenBalances();
-                        tg.sendData(JSON.stringify({
-                            action: 'wallet_connected',
-                            publicKey: publicKey
-                        }));
-                    })
-                    .catch(err => {
-                        connectBtn.textContent = 'Conectar Wallet';
-                        if (err.code === 4001) {
-                            showError('Conexión rechazada por el usuario');
-                        } else {
-                            showError(`Error al conectar: ${err.message}`);
-                        }
-                    });
-            } else {
-                // Si la app no está instalada, redirigir a la tienda
-                showError('Phantom no está instalado en este dispositivo');
-                
-                // Determinar la tienda correcta según el dispositivo
-                const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-                const storeUrl = isIOS 
-                    ? 'https://apps.apple.com/app/phantom-solana-wallet/id1598432977'
-                    : 'https://play.google.com/store/apps/details?id=app.phantom';
-                
-                // Preguntar si desea instalar
-                if (confirm('¿Deseas instalar Phantom Wallet?')) {
-                    window.open(storeUrl, '_blank');
-                }
-            }
+            // Crear URL para deeplink según la documentación oficial de Phantom
+            // https://docs.phantom.app/integrating/deeplinks-ios-and-android
+            
+            // Generar un ID único para esta sesión
+            const sessionId = Math.random().toString(36).substring(2, 15);
+            
+            // Guardar el ID de sesión en localStorage para verificar al retorno
+            localStorage.setItem('phantom_session_id', sessionId);
+            
+            // Construir la URL de retorno (esta misma página)
+            const returnUrl = encodeURIComponent(window.location.href);
+            
+            // Construir el deeplink para Phantom
+            // Formato: https://phantom.app/ul/v1/connect?app_url=RETURN_URL&dapp_encryption_public_key=OPTIONAL_ENCRYPTION_KEY&redirect_link=OPTIONAL_REDIRECT_LINK&session=SESSION_ID
+            const phantomDeepLink = `https://phantom.app/ul/v1/connect?app_url=${returnUrl}&session=${sessionId}`;
+            
+            // Mostrar mensaje al usuario
+            showInfo('Redirigiendo a Phantom Wallet...');
+            statusDiv.textContent = 'Abriendo Phantom Wallet...';
+            
+            // Redirigir a la app de Phantom
+            setTimeout(() => {
+                window.location.href = phantomDeepLink;
+            }, 1000);
         }
 
         // Función para obtener balances de tokens
