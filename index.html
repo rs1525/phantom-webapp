@@ -542,17 +542,28 @@
                 const appUrl = encodeURIComponent(window.location.href);
                 debugInfo(`URL de retorno: ${appUrl}`);
                 
-                // Construir el deeplink para Phantom - formato web que funciona mejor en la mayoría de dispositivos
-                const webDeepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}`;
-                debugInfo(`Usando web link directo: ${webDeepLink}`);
+                // Usar el formato nativo de deeplink para dispositivos móviles
+                // Este formato abre directamente la app si está instalada
+                const phantomDeepLink = `phantom://ul/v1/connect?app_url=${appUrl}&dapp_encryption_public_key=phantom_public_key`;
+                debugInfo(`Usando deeplink nativo: ${phantomDeepLink}`);
                 
                 // Mostrar mensaje al usuario
                 showInfo('Abriendo Phantom Wallet...');
-                statusDiv.textContent = 'Redirigiendo a Phantom Wallet...';
+                statusDiv.textContent = 'Intentando abrir Phantom...';
                 
-                // Redirigir directamente sin iframe ni timeouts adicionales
-                debugInfo('Redirigiendo directamente a Phantom...');
-                window.location.href = webDeepLink;
+                // Redirigir directamente a la app
+                debugInfo('Redirigiendo a la app Phantom...');
+                window.location.href = phantomDeepLink;
+                
+                // Si después de 2 segundos seguimos en la misma página, intentar con el formato web
+                setTimeout(() => {
+                    if (document.visibilityState !== 'hidden') {
+                        debugInfo('La app no se abrió, intentando con formato web...');
+                        const webDeepLink = `https://phantom.app/ul/v1/connect?app_url=${appUrl}`;
+                        showInfo('Intentando abrir Phantom vía web...');
+                        window.location.href = webDeepLink;
+                    }
+                }, 2000);
             } catch (err) {
                 const errorMsg = `Error al conectar: ${err.message}`;
                 debugInfo(errorMsg);
